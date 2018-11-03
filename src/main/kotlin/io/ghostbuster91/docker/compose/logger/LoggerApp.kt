@@ -8,7 +8,6 @@ import de.gesellix.docker.compose.ComposeFileReader
 import io.reactivex.BackpressureStrategy
 import io.reactivex.Flowable
 import io.reactivex.FlowableEmitter
-import io.reactivex.functions.BiFunction
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
@@ -21,12 +20,10 @@ fun main(args: Array<String>) {
     val inputStream = FileInputStream(File(workDir, "docker-compose.yml"))
     val config = ComposeFileReader().loadYaml(inputStream)
     val services = config["services"]!!.keys.toList()
-    println(services)
 
     DefaultTerminalFactory().createTerminal().use { terminal ->
         val userInput = keyStrokeStream(terminal)
                 .subscribeOn(Schedulers.io())
-
 
         val transformedUserInput = userInput
                 .map { it.character.toString() }
@@ -35,10 +32,10 @@ fun main(args: Array<String>) {
                 .startWith(0)
                 .map { services.getOrElse(it) { services[0] } }
                 .doOnNext { println("Switched to $it") }
-        scriptStream()
-                .withLatestFrom(transformedUserInput, BiFunction<String, String, Pair<String, String>> { t1, t2 -> t1 to t2 })
-                .filter { (line,service)-> line.take(service.length * 2).contains(service)}
-                .blockingSubscribe { println(it.first) }
+
+        transformedUserInput
+                .switchMap { scriptStream(it) }
+                .blockingSubscribe { println(it) }
     }
 }
 
@@ -54,7 +51,6 @@ private fun Terminal.addKeyStrokeListener(onKeyStroke: (KeyStroke) -> Unit): Ato
     while (isRunning.get()) {
         val pollInput = pollInput()
         if (pollInput != null && pollInput.keyType == KeyType.Character) {
-            println(pollInput)
             onKeyStroke(pollInput)
         }
         Thread.sleep(100)
@@ -63,8 +59,8 @@ private fun Terminal.addKeyStrokeListener(onKeyStroke: (KeyStroke) -> Unit): Ato
 }
 
 
-private fun scriptStream(): Flowable<String> {
-    return createProcess()
+private fun scriptStream(it: String): Flowable<String> {
+    return createProcess(it)
             .flatMap { process ->
                 Flowable.using(
                         { process.inputStream.bufferedReader() },
@@ -76,9 +72,13 @@ private fun scriptStream(): Flowable<String> {
             }
 }
 
-private fun createProcess(): Flowable<Process> {
+private fun createProcess(it: String): Flowable<Process> {
     return Flowable.create({ e: FlowableEmitter<Process> ->
-        val process = Runtime.getRuntime().exec("docker-compose logs -f")
+        val process = ProcessBuilder()
+                .directory(File(System.getProperty("user.dir")))
+                .redirectErrorStream(true)
+                .command("docker-compose", "logs", "-f", "--tail=200", it)
+                .start()
         e.onNext(process)
         e.setCancellable {
             process.destroy()
