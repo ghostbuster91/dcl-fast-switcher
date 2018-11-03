@@ -1,0 +1,43 @@
+
+
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.2.51'
+}
+
+apply plugin: 'java'
+apply plugin: 'application'
+group 'io.ghostbuster91.docker.compose'
+version '1.0-SNAPSHOT'
+
+mainClassName = 'io.ghostbuster91.docker.compose.logger.LoggerAppKt'
+
+compileKotlin {
+    kotlinOptions.jvmTarget = "1.8"
+}
+compileTestKotlin {
+    kotlinOptions.jvmTarget = "1.8"
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+    compile 'com.github.docker-client:docker-compose-v3:master'
+    compile "io.reactivex.rxjava2:rxjava:2.1.7"
+    compile 'com.googlecode.lanterna:lanterna:3.0.1'
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': mainClassName
+    }
+    from {
+        configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+

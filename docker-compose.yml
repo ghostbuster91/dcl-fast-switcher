@@ -1,0 +1,72 @@
+version: '3'
+services:
+  harvester_postgres:
+    image: postgres
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: harvester_u
+      POSTGRES_PASSWORD: harvester_p
+      POSTGRES_DB: harvester_dev
+  eth-node:
+    image: ethereum/client-go:v1.8.15
+    ports:
+      - "8545:8545"
+      - "30303:30303"
+    volumes:
+      - "./eth/genesis.json:/root/genesis.json"
+      - "./eth/run.sh:/root/run.sh"
+    entrypoint:
+      - /root/run.sh
+  crypto-node-proxy:
+    image: softwaremill/crypto-node-proxy-eth
+    depends_on:
+      - eth-node
+    ports:
+      - "8546:8546"
+    environment:
+      PROXY_API_HOST: "0.0.0.0"
+      PROXY_API_PORT: "8546"
+      HOSTS: "geth=eth-node:8545"
+  contract-deployer:
+    image: softwaremill/sakiewka-contracts
+    depends_on:
+      - eth-node
+  harvester:
+    image: softwaremill/crypto-harvester:latest
+    depends_on:
+      - harvester_postgres
+      - crypto-node-proxy
+    ports:
+      - "9000:9000"
+    environment:
+      HARVESTER_CURRENCIES.0: "ETH"
+      HARVESTER_ETH_NODE_URI: "http://crypto-node-proxy:8546"
+      HARVESTER_SQL_HOST: "harvester_postgres"
+  address-generator-postgres:
+    image: postgres
+    ports:
+      - "15433:5432"
+    environment:
+      POSTGRES_USER: address-generator
+      POSTGRES_PASSWORD: address-generator
+      POSTGRES_DB: address-generator
+  address-generator:
+    image: softwaremill/address-generator
+    ports:
+      - "9300:9300"
+    depends_on:
+      - address-generator-postgres
+      - contract-deployer
+      - harvester
+    entrypoint:
+      - bash -c "while ping -c1 contract-deployer &>/dev/null; do sleep 1; done; echo 'contract-deployer finished'; /opt/docker/docker-entrypoint.sh /opt/docker/bin/address-generator"
+    environment:
+      APP_SELF_URL: "http://address-generator:9300"
+      DB_HOST: "address-generator-postgres"
+      ZLEVATOR_URL: "http://zlevator:9400"
+      HARVESTER_URL: "http://harvester:9000"
+      ETH_NODE_URL: "http://crypto-node-proxy:8546"
+      ETH_MASTER_ADDRESS: "0x9f10a38a51463c63e795e53a924570710312af63"
+      ETH_MASTER_ADDRESS_PK: "CF6979AC468FCACC170D4EE83149EA577ED5563E2F048F72C3D4A24347739A3C"
+      TOKEN_ADDRESS_FACTORY_CONTRACT_ADDRESS: "0x14b6c497963baf67a74f23a4a3eb9fe8e4d607c7"
