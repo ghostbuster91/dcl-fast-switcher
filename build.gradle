@@ -1,11 +1,9 @@
-
-
 plugins {
     id 'org.jetbrains.kotlin.jvm' version '1.2.51'
 }
 
-apply plugin: 'java'
 apply plugin: 'application'
+
 group 'io.ghostbuster91.docker.compose'
 version '1.0-SNAPSHOT'
 
@@ -29,15 +27,6 @@ dependencies {
     compile "io.reactivex.rxjava2:rxjava:2.1.7"
     compile 'com.googlecode.lanterna:lanterna:3.0.1'
     testCompile group: 'junit', name: 'junit', version: '4.12'
-}
-
-jar {
-    manifest {
-        attributes 'Main-Class': mainClassName
-    }
-    from {
-        configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
-    }
 }
 
 
