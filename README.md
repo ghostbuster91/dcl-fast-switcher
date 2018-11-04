@@ -5,7 +5,7 @@ Stands for docker-compose logs fast switcher
 ## Installation
 Using [ktm](https://github.com/ghostbuster91/ktm)
 
-`$ ktm install com.github.ghostbuster91:dcl-fast-switcher --version 0.1`
+`$ ktm install com.github.ghostbuster91:dcl-fast-switcher --version 0.2`
 
 
 ## Usage
