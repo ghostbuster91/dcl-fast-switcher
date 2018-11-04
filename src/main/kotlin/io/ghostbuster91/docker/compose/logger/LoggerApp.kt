@@ -7,7 +7,6 @@ import de.gesellix.docker.compose.ComposeFileReader
 import io.reactivex.BackpressureStrategy
 import io.reactivex.Flowable
 import io.reactivex.FlowableEmitter
-import io.reactivex.functions.Function
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
@@ -22,6 +21,8 @@ fun main(args: Array<String>) {
     val config = ComposeFileReader().loadYaml(inputStream)
     val services = config["services"]!!.keys.toList()
     val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
+    val shiftMapping = mapOf("!" to 1, "@" to 2, "#" to 3, "$" to 4, "%" to 5, "^" to 6, "&" to 7, "*" to 8, "(" to 9, ")" to 0)
+
     println("Services mapping:")
     services.forEachIndexed { index, s ->
         println("$index -> $s")
@@ -31,39 +32,42 @@ fun main(args: Array<String>) {
         keyStrokeStream(terminal)
                 .subscribeOn(Schedulers.io())
                 .blockingFirst()
-        val userInput = keyStrokeStream(terminal)
-                .subscribeOn(Schedulers.io())
-                .filter { it.character.toString().matches("[0-9]".toRegex()) || it.character.toString() in altMapping.keys }
-        val userCommand = userInput
-                .map {
-                    val isAltDown = it.character.toString() in altMapping.keys
-                    val index = if (isAltDown) {
-                        altMapping[it.character.toString()]!!
-                    } else {
-                        it.character.toString().toInt()
-                    }
-                    val service = services.getOrElse(index) { services[0] }
-                    if (isAltDown) {
-                        UserCommand.Add(service)
-                    } else {
-                        UserCommand.ShowSingle(service)
-                    }
-                }
-
-        val transformedUserInput = userCommand
-                .distinctUntilChanged(Function<UserCommand, String> { it.service })
-                .scan(StreamType.Single(services[0]) as StreamType) { acc: StreamType, item: UserCommand ->
+        val userCommand = createUserCommandStream(terminal, shiftMapping, services, altMapping)
+        val servicesStream = userCommand
+                .scan(ServiceStream(setOf(services[0]))) { acc: ServiceStream, item: UserCommand ->
                     when (item) {
-                        is UserCommand.Add -> StreamType.Multiple(acc.services + item.service)
-                        is UserCommand.ShowSingle -> StreamType.Single(item.service)
+                        is UserCommand.Add -> ServiceStream(acc.services + item.service)
+                        is UserCommand.Single -> ServiceStream(setOf(item.service))
+                        is UserCommand.Remove -> ServiceStream(acc.services - item.service)
                     }
                 }
+                .distinctUntilChanged()
                 .doOnNext { println("Switched to $it") }
 
-        transformedUserInput
-                .switchMap { scriptStream(it.services) }
+        servicesStream
+                .switchMap { streamFromDockerCompose(it.services.toList()) }
                 .blockingSubscribe { println(it) }
     }
+}
+
+private fun createUserCommandStream(terminal: Terminal, shiftMapping: Map<String, Int>, services: List<String>, altMapping: Map<String, Int>): Flowable<UserCommand> {
+    val userInput = keyStrokeStream(terminal)
+            .subscribeOn(Schedulers.io())
+            .share()
+    val shiftKey = userInput
+            .filter { it.character.toString() in shiftMapping }
+            .map { shiftMapping[it.character.toString()]!! }
+            .map { UserCommand.Remove(services.getOrElse(it) { services[0] }) }
+    val altKey = userInput
+            .filter { it.character.toString() in altMapping }
+            .map { altMapping[it.character.toString()]!! }
+            .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
+    val numberKey = userInput
+            .filter { it.character.toString().matches("[0-9]".toRegex()) }
+            .map { it.character.toString().toInt() }
+            .map { UserCommand.Single(services.getOrElse(it) { services[0] }) }
+
+    return Flowable.merge(shiftKey, altKey, numberKey)
 }
 
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
@@ -73,12 +77,12 @@ private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
             .map { it.get() }
 }
 
-private fun scriptStream(services: List<String>): Flowable<String> {
-    return createProcess(listOf("docker-compose", "logs", "-f", "--tail=2") + services)
+private fun streamFromDockerCompose(services: List<String>): Flowable<String> {
+    return createProcess(listOf("docker-compose", "logs", "-f", "--tail=200") + services)
             .flatMap { process ->
                 Flowable.using(
                         { process.inputStream.bufferedReader() },
-                        { reader -> wrapInIterable(reader).subscribeOn(Schedulers.single()) },
+                        { reader -> reader.toFlowable().subscribeOn(Schedulers.single()) },
                         { reader -> reader.close() })
                         .subscribeOn(Schedulers.io())
                         .doOnError { e -> e.printStackTrace() }
@@ -102,10 +106,10 @@ private fun createProcess(command: Command): Flowable<Process> {
             .subscribeOn(Schedulers.io())
 }
 
-fun wrapInIterable(inputStream: BufferedReader): Flowable<String> {
+fun BufferedReader.toFlowable(): Flowable<String> {
     return Flowable.fromIterable(object : Iterable<String> {
         override fun iterator(): Iterator<String> {
-            return inputStream.lines().iterator()
+            return lines().iterator()
         }
     })
 }
@@ -116,16 +120,10 @@ sealed class UserCommand {
 
     abstract val service: String
 
-    data class ShowSingle(override val service: String) : UserCommand()
+    data class Single(override val service: String) : UserCommand()
     data class Add(override val service: String) : UserCommand()
+    data class Remove(override val service: String) : UserCommand()
 }
 
-sealed class StreamType {
-    abstract val services: List<String>
 
-    data class Single(val service: String) : StreamType() {
-        override val services = listOf(service)
-    }
-
-    data class Multiple(override val services: List<String>) : StreamType()
-}
+data class ServiceStream(val services: Set<String>)
