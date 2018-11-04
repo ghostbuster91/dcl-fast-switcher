@@ -7,6 +7,7 @@ import de.gesellix.docker.compose.ComposeFileReader
 import io.reactivex.BackpressureStrategy
 import io.reactivex.Flowable
 import io.reactivex.FlowableEmitter
+import io.reactivex.functions.Function
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
@@ -20,6 +21,7 @@ fun main(args: Array<String>) {
     val inputStream = FileInputStream(File(workDir, "docker-compose.yml"))
     val config = ComposeFileReader().loadYaml(inputStream)
     val services = config["services"]!!.keys.toList()
+    val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
     println("Services mapping:")
     services.forEachIndexed { index, s ->
         println("$index -> $s")
@@ -31,18 +33,35 @@ fun main(args: Array<String>) {
                 .blockingFirst()
         val userInput = keyStrokeStream(terminal)
                 .subscribeOn(Schedulers.io())
+                .filter { it.character.toString().matches("[0-9]".toRegex()) || it.character.toString() in altMapping.keys }
+        val userCommand = userInput
+                .map {
+                    val isAltDown = it.character.toString() in altMapping.keys
+                    val index = if (isAltDown) {
+                        altMapping[it.character.toString()]!!
+                    } else {
+                        it.character.toString().toInt()
+                    }
+                    val service = services.getOrElse(index) { services[0] }
+                    if (isAltDown) {
+                        UserCommand.Add(service)
+                    } else {
+                        UserCommand.ShowSingle(service)
+                    }
+                }
 
-        val transformedUserInput = userInput
-                .map { it.character.toString() }
-                .filter { it.matches("[0-9]".toRegex()) }
-                .map { it.toInt() }
-                .startWith(0)
-                .map { services.getOrElse(it) { services[0] } }
-                .distinctUntilChanged()
+        val transformedUserInput = userCommand
+                .distinctUntilChanged(Function<UserCommand, String> { it.service })
+                .scan(StreamType.Single(services[0]) as StreamType) { acc: StreamType, item: UserCommand ->
+                    when (item) {
+                        is UserCommand.Add -> StreamType.Multiple(acc.services + item.service)
+                        is UserCommand.ShowSingle -> StreamType.Single(item.service)
+                    }
+                }
                 .doOnNext { println("Switched to $it") }
 
         transformedUserInput
-                .switchMap { scriptStream(it) }
+                .switchMap { scriptStream(it.services) }
                 .blockingSubscribe { println(it) }
     }
 }
@@ -54,8 +73,8 @@ private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
             .map { it.get() }
 }
 
-private fun scriptStream(it: String): Flowable<String> {
-    return createProcess(it)
+private fun scriptStream(services: List<String>): Flowable<String> {
+    return createProcess(listOf("docker-compose", "logs", "-f", "--tail=2") + services)
             .flatMap { process ->
                 Flowable.using(
                         { process.inputStream.bufferedReader() },
@@ -70,12 +89,12 @@ private fun scriptStream(it: String): Flowable<String> {
             }
 }
 
-private fun createProcess(it: String): Flowable<Process> {
+private fun createProcess(command: Command): Flowable<Process> {
     return Flowable.create({ e: FlowableEmitter<Process> ->
         val process = ProcessBuilder()
                 .directory(File(System.getProperty("user.dir")))
                 .redirectErrorStream(true)
-                .command("docker-compose", "logs", "-f", "--tail=200", it)
+                .command(command)
                 .start()
         e.onNext(process)
         e.onComplete()
@@ -89,4 +108,24 @@ fun wrapInIterable(inputStream: BufferedReader): Flowable<String> {
             return inputStream.lines().iterator()
         }
     })
+}
+
+typealias Command = List<String>
+
+sealed class UserCommand {
+
+    abstract val service: String
+
+    data class ShowSingle(override val service: String) : UserCommand()
+    data class Add(override val service: String) : UserCommand()
+}
+
+sealed class StreamType {
+    abstract val services: List<String>
+
+    data class Single(val service: String) : StreamType() {
+        override val services = listOf(service)
+    }
+
+    data class Multiple(override val services: List<String>) : StreamType()
 }
