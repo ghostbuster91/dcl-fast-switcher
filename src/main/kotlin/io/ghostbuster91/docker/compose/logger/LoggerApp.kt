@@ -4,9 +4,7 @@ import com.googlecode.lanterna.input.KeyStroke
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.googlecode.lanterna.terminal.Terminal
 import de.gesellix.docker.compose.ComposeFileReader
-import io.reactivex.BackpressureStrategy
 import io.reactivex.Flowable
-import io.reactivex.FlowableEmitter
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
@@ -79,31 +77,25 @@ private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
 
 private fun streamFromDockerCompose(services: List<String>): Flowable<String> {
     return createProcess(listOf("docker-compose", "logs", "-f", "--tail=200") + services)
-            .flatMap { process ->
-                Flowable.using(
-                        { process.inputStream.bufferedReader() },
-                        { reader -> reader.toFlowable().subscribeOn(Schedulers.single()) },
-                        { reader -> reader.close() })
-                        .subscribeOn(Schedulers.io())
-                        .doOnError { e -> e.printStackTrace() }
-                        .onErrorResumeNext { t: Throwable -> if (t is UncheckedIOException) Flowable.empty<String>() else throw t }
-                        .doOnCancel { process.destroy() }
-                        .takeUntil { !process.isAlive }
-                        .mergeWith(Flowable.never())
-            }
+            .mergeWith(Flowable.never())
+            .subscribeOn(Schedulers.io())
 }
 
-private fun createProcess(command: Command): Flowable<Process> {
-    return Flowable.create({ e: FlowableEmitter<Process> ->
-        val process = ProcessBuilder()
-                .directory(File(System.getProperty("user.dir")))
-                .redirectErrorStream(true)
-                .command(command)
-                .start()
-        e.onNext(process)
-        e.onComplete()
-    }, BackpressureStrategy.DROP)
-            .subscribeOn(Schedulers.io())
+private fun createProcess(command: Command): Flowable<String> {
+    return Flowable
+            .using(
+                    {
+                        ProcessBuilder()
+                                .directory(File(System.getProperty("user.dir")))
+                                .redirectErrorStream(true)
+                                .command(command)
+                                .start()
+                    },
+                    { process -> process.inputStream.bufferedReader().toFlowable() },
+                    { process -> process.destroy() }
+            )
+            .onErrorResumeNext { t: Throwable -> if (t is UncheckedIOException) Flowable.empty<String>() else throw t }
+
 }
 
 fun BufferedReader.toFlowable(): Flowable<String> {
