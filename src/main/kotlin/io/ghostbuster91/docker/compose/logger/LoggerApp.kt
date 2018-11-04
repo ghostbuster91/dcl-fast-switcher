@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) {
     val workDir = System.getProperty("user.dir")
-    val inputStream = FileInputStream(File(workDir, "docker-compose.yml"))
+    val inputStream = FileInputStream(File(workDir, args.getOrElse(0) { "docker-compose.yml" }))
     val config = ComposeFileReader().loadYaml(inputStream)
     val services = config["services"]!!.keys.toList()
     val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
