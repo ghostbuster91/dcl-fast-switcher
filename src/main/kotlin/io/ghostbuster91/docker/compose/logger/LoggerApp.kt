@@ -14,24 +14,15 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) {
-    val workDir = System.getProperty("user.dir")
-    val inputStream = FileInputStream(File(workDir, args.getOrElse(0) { "docker-compose.yml" }))
-    val config = ComposeFileReader().loadYaml(inputStream)
-    val services = config["services"]!!.keys.toList()
-    val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
-    val shiftMapping = mapOf("!" to 1, "@" to 2, "#" to 3, "$" to 4, "%" to 5, "^" to 6, "&" to 7, "*" to 8, "(" to 9, ")" to 0)
-
+    val services = readServicesFromDockerConfig(args)
     println("Services mapping:")
     services.forEachIndexed { index, s ->
         println("$index -> $s")
     }
     println("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
-        keyStrokeStream(terminal)
-                .subscribeOn(Schedulers.io())
-                .blockingFirst()
-        val userCommand = createUserCommandStream(terminal, shiftMapping, services, altMapping)
-        val servicesStream = userCommand
+        terminal.waitForAnyKey()
+        val servicesStream = createUserCommandStream(terminal, services)
                 .scan(ServiceStream(setOf(services[0]))) { acc: ServiceStream, item: UserCommand ->
                     when (item) {
                         is UserCommand.Add -> ServiceStream(acc.services + item.service)
@@ -48,24 +39,50 @@ fun main(args: Array<String>) {
     }
 }
 
-private fun createUserCommandStream(terminal: Terminal, shiftMapping: Map<String, Int>, services: List<String>, altMapping: Map<String, Int>): Flowable<UserCommand> {
+private fun Terminal.waitForAnyKey() {
+    keyStrokeStream(this)
+            .subscribeOn(Schedulers.io())
+            .blockingFirst()
+}
+
+private fun readServicesFromDockerConfig(args: Array<String>): List<String> {
+    val workDir = System.getProperty("user.dir")
+    val inputStream = FileInputStream(File(workDir, args.getOrElse(0) { "docker-compose.yml" }))
+    val config = ComposeFileReader().loadYaml(inputStream)
+    return config["services"]!!.keys.toList()
+}
+
+private fun createUserCommandStream(terminal: Terminal, services: List<String>): Flowable<UserCommand> {
     val userInput = keyStrokeStream(terminal)
             .subscribeOn(Schedulers.io())
             .share()
-    val shiftKey = userInput
+    val shiftKey = userShiftInput(userInput, services)
+    val altKey = userAltInput(userInput, services)
+    val numberKey = userNumberInput(userInput, services)
+    return Flowable.merge(shiftKey, altKey, numberKey)
+}
+
+private fun userShiftInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Remove>? {
+    val shiftMapping = mapOf("!" to 1, "@" to 2, "#" to 3, "$" to 4, "%" to 5, "^" to 6, "&" to 7, "*" to 8, "(" to 9, ")" to 0)
+    return userInput
             .filter { it.character.toString() in shiftMapping }
             .map { shiftMapping[it.character.toString()]!! }
             .map { UserCommand.Remove(services.getOrElse(it) { services[0] }) }
-    val altKey = userInput
-            .filter { it.character.toString() in altMapping }
-            .map { altMapping[it.character.toString()]!! }
-            .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
-    val numberKey = userInput
+}
+
+private fun userNumberInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Single>? {
+    return userInput
             .filter { it.character.toString().matches("[0-9]".toRegex()) }
             .map { it.character.toString().toInt() }
             .map { UserCommand.Single(services.getOrElse(it) { services[0] }) }
+}
 
-    return Flowable.merge(shiftKey, altKey, numberKey)
+private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Add>? {
+    val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
+    return userInput
+            .filter { it.character.toString() in altMapping }
+            .map { altMapping[it.character.toString()]!! }
+            .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
 }
 
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
