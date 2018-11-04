@@ -1,4 +1,4 @@
-# DCL-FAST-SWITCHER
+# DCL-Fast-Switcher
 
 Stands for docker-compose logs fast switcher
 
