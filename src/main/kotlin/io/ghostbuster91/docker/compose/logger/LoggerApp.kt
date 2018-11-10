@@ -21,9 +21,8 @@ fun main(args: Array<String>) {
     }
     println("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
-        terminal.waitForAnyKey()
         val servicesStream = createUserCommandStream(terminal, services)
-                .scan(ServiceStream(setOf(services[0]))) { acc: ServiceStream, item: UserCommand ->
+                .scan(ServiceStream(setOf(terminal.waitForNumberInput(services).service))) { acc: ServiceStream, item: UserCommand ->
                     when (item) {
                         is UserCommand.Add -> ServiceStream(acc.services + item.service)
                         is UserCommand.Single -> ServiceStream(setOf(item.service))
@@ -39,9 +38,12 @@ fun main(args: Array<String>) {
     }
 }
 
-private fun Terminal.waitForAnyKey() {
-    keyStrokeStream(this)
+private fun Terminal.waitForNumberInput(services: List<String>): UserCommand.Single {
+    return keyStrokeStream(this)
             .subscribeOn(Schedulers.io())
+            .let {
+                userNumberInput(it,services)
+            }
             .blockingFirst()
 }
 
@@ -62,25 +64,25 @@ private fun createUserCommandStream(terminal: Terminal, services: List<String>):
     return Flowable.merge(shiftKey, altKey, numberKey)
 }
 
-private fun userShiftInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Remove>? {
+private fun userShiftInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Remove> {
     val shiftMapping = mapOf("!" to 1, "@" to 2, "#" to 3, "$" to 4, "%" to 5, "^" to 6, "&" to 7, "*" to 8, "(" to 9, ")" to 0)
     return userInput
-            .filter { it.character.toString() in shiftMapping }
+            .filter { it.character?.toString() in shiftMapping }
             .map { shiftMapping[it.character.toString()]!! }
             .map { UserCommand.Remove(services.getOrElse(it) { services[0] }) }
 }
 
-private fun userNumberInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Single>? {
+private fun userNumberInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Single> {
     return userInput
-            .filter { it.character.toString().matches("[0-9]".toRegex()) }
+            .filter { it.character?.toString()?.matches("[0-9]".toRegex()) ?: false }
             .map { it.character.toString().toInt() }
             .map { UserCommand.Single(services.getOrElse(it) { services[0] }) }
 }
 
-private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Add>? {
+private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Add> {
     val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
     return userInput
-            .filter { it.character.toString() in altMapping }
+            .filter { it.character?.toString() in altMapping }
             .map { altMapping[it.character.toString()]!! }
             .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
 }
