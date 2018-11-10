@@ -22,11 +22,11 @@ fun main(args: Array<String>) {
     println("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
         val servicesStream = createUserCommandStream(terminal, services)
-                .scan(ServiceStream(setOf(terminal.waitForNumberInput(services).service))) { acc: ServiceStream, item: UserCommand ->
+                .scan(StreamDefinition(setOf(terminal.waitForNumberInput(services).service))) { acc: StreamDefinition, item: UserCommand ->
                     when (item) {
-                        is UserCommand.Add -> ServiceStream(acc.services + item.service)
-                        is UserCommand.Single -> ServiceStream(setOf(item.service))
-                        is UserCommand.Remove -> ServiceStream(acc.services - item.service)
+                        is UserCommand.Add -> StreamDefinition(acc.services + item.service)
+                        is UserCommand.Single -> StreamDefinition(setOf(item.service))
+                        is UserCommand.Remove -> StreamDefinition(acc.services - item.service)
                         UserCommand.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
                     }
                 }
@@ -103,7 +103,7 @@ private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
             .map { it.get() }
 }
 
-private fun streamFromDockerCompose(streamDefinition: ServiceStream): Flowable<String> {
+private fun streamFromDockerCompose(streamDefinition: StreamDefinition): Flowable<String> {
     val command = DockerComposeCommandBuilder(
             services = streamDefinition.services.toList(),
             showTimestamps = streamDefinition.showTimeStamps)
@@ -148,8 +148,8 @@ sealed class UserCommand {
 }
 
 
-data class ServiceStream(val services: Set<String>,
-                         val showTimeStamps: Boolean = false)
+data class StreamDefinition(val services: Set<String>,
+                            val showTimeStamps: Boolean = false)
 
 data class DockerComposeCommandBuilder(val services: List<String>,
                                        val showTimestamps: Boolean = false,
