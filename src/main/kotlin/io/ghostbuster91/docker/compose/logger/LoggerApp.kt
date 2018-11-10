@@ -27,13 +27,14 @@ fun main(args: Array<String>) {
                         is UserCommand.Add -> ServiceStream(acc.services + item.service)
                         is UserCommand.Single -> ServiceStream(setOf(item.service))
                         is UserCommand.Remove -> ServiceStream(acc.services - item.service)
+                        UserCommand.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
                     }
                 }
                 .distinctUntilChanged()
                 .doOnNext { println("Switched to $it") }
 
         servicesStream
-                .switchMap { streamFromDockerCompose(it.services.toList()) }
+                .switchMap { streamFromDockerCompose(it) }
                 .blockingSubscribe { println(it) }
     }
 }
@@ -42,7 +43,7 @@ private fun Terminal.waitForNumberInput(services: List<String>): UserCommand.Sin
     return keyStrokeStream(this)
             .subscribeOn(Schedulers.io())
             .let {
-                userNumberInput(it,services)
+                userNumberInput(it, services)
             }
             .blockingFirst()
 }
@@ -61,7 +62,8 @@ private fun createUserCommandStream(terminal: Terminal, services: List<String>):
     val shiftKey = userShiftInput(userInput, services)
     val altKey = userAltInput(userInput, services)
     val numberKey = userNumberInput(userInput, services)
-    return Flowable.merge(shiftKey, altKey, numberKey)
+    val optionsKey = userOptionInput(userInput)
+    return Flowable.merge(shiftKey, altKey, numberKey, optionsKey)
 }
 
 private fun userShiftInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Remove> {
@@ -87,6 +89,13 @@ private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>)
             .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
 }
 
+private fun userOptionInput(userInput: Flowable<KeyStroke>): Flowable<UserCommand.SwitchTimestamp> {
+    val optionMapping = mapOf("t" to UserCommand.SwitchTimestamp)
+    return userInput
+            .filter { it.character?.toString() in optionMapping }
+            .map { optionMapping[it.character.toString()]!! }
+}
+
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
     return Flowable.interval(100, TimeUnit.MILLISECONDS)
             .map { Optional.ofNullable(terminal.pollInput()) }
@@ -94,8 +103,12 @@ private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
             .map { it.get() }
 }
 
-private fun streamFromDockerCompose(services: List<String>): Flowable<String> {
-    return createProcess(listOf("docker-compose", "logs", "-f", "--tail=200") + services)
+private fun streamFromDockerCompose(streamDefinition: ServiceStream): Flowable<String> {
+    val command = DockerComposeCommandBuilder(
+            services = streamDefinition.services.toList(),
+            showTimestamps = streamDefinition.showTimeStamps)
+            .build()
+    return createProcess(command)
             .mergeWith(Flowable.never())
             .subscribeOn(Schedulers.io())
 }
@@ -128,13 +141,32 @@ fun BufferedReader.toFlowable(): Flowable<String> {
 typealias Command = List<String>
 
 sealed class UserCommand {
-
-    abstract val service: String
-
-    data class Single(override val service: String) : UserCommand()
-    data class Add(override val service: String) : UserCommand()
-    data class Remove(override val service: String) : UserCommand()
+    data class Single(val service: String) : UserCommand()
+    data class Add(val service: String) : UserCommand()
+    data class Remove(val service: String) : UserCommand()
+    object SwitchTimestamp : UserCommand()
 }
 
 
-data class ServiceStream(val services: Set<String>)
+data class ServiceStream(val services: Set<String>,
+                         val showTimeStamps: Boolean = false)
+
+data class DockerComposeCommandBuilder(val services: List<String>,
+                                       val showTimestamps: Boolean = false,
+                                       val showColors: Boolean = true,
+                                       val follow: Boolean = true,
+                                       val tailSize: Int = 200) {
+    fun build(): Command {
+        var command = listOf("docker-compose", "logs", "--tail=$tailSize")
+        if (showTimestamps) {
+            command += "--timestamps"
+        }
+        if (!showColors) {
+            command += "--no-color"
+        }
+        if (follow) {
+            command += "--follow"
+        }
+        return command + services
+    }
+}
