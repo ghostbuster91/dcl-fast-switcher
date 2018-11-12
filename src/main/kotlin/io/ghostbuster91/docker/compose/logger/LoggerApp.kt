@@ -5,6 +5,7 @@ import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.googlecode.lanterna.terminal.Terminal
 import de.gesellix.docker.compose.ComposeFileReader
 import io.reactivex.Flowable
+import io.reactivex.functions.Consumer
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
@@ -15,11 +16,9 @@ import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) {
     val services = readServicesFromDockerConfig(args)
-    println("Services mapping:")
-    services.forEachIndexed { index, s ->
-        println("$index -> $s")
-    }
-    println("Press any key to continue...")
+    val consoleOutConsumer = ConsoleOutConsumer()
+    emitHelp(services).blockingSubscribe(consoleOutConsumer)
+    consoleOutConsumer.accept("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
         val servicesStream = createUserCommandStream(terminal, services)
                 .scan(StreamDefinition(setOf(terminal.waitForNumberInput(services).service))) { acc: StreamDefinition, item: UserCommand ->
@@ -28,15 +27,40 @@ fun main(args: Array<String>) {
                         is UserCommand.Single -> StreamDefinition(setOf(item.service))
                         is UserCommand.Remove -> StreamDefinition(acc.services - item.service)
                         UserCommand.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
+                        UserCommand.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
                     }
                 }
                 .distinctUntilChanged()
-                .doOnNext { println("Switched to $it") }
+                .doOnNext { consoleOutConsumer.accept("Switched to $it") }
 
         servicesStream
-                .switchMap { streamFromDockerCompose(it) }
-                .blockingSubscribe { println(it) }
+                .switchMap {
+                    if (it.showHelp) {
+                        emitHelp(services).concatWith(Flowable.never())
+                    } else {
+                        streamFromDockerCompose(it)
+                    }
+                }
+                .blockingSubscribe(consoleOutConsumer)
     }
+}
+
+class ConsoleOutConsumer : Consumer<String> {
+    override fun accept(t: String?) {
+        println(t)
+    }
+}
+
+private fun emitHelp(services: List<String>): Flowable<String> {
+    return Flowable.fromIterable(listOf(
+            "=======================================================",
+            "Key bindings:",
+            "h - show/hide this help",
+            "t - show/hide timestamps",
+            "Services mapping:") +
+            services.mapIndexed { index, s ->
+                "$index -> $s"
+            })
 }
 
 private fun Terminal.waitForNumberInput(services: List<String>): UserCommand.Single {
@@ -145,11 +169,13 @@ sealed class UserCommand {
     data class Add(val service: String) : UserCommand()
     data class Remove(val service: String) : UserCommand()
     object SwitchTimestamp : UserCommand()
+    object SwitchHelp : UserCommand()
 }
 
 
 data class StreamDefinition(val services: Set<String>,
-                            val showTimeStamps: Boolean = false)
+                            val showTimeStamps: Boolean = false,
+                            val showHelp: Boolean = false)
 
 data class DockerComposeCommandBuilder(val services: List<String>,
                                        val showTimestamps: Boolean = false,
