@@ -36,7 +36,9 @@ fun main(args: Array<String>) {
         servicesStream
                 .switchMap {
                     if (it.showHelp) {
-                        emitHelp(services).concatWith(Flowable.never())
+                        emitHelp(services)
+                                .concatWith(streamInfoHelp(it))
+                                .concatWith(Flowable.never())
                     } else {
                         streamFromDockerCompose(it)
                     }
@@ -61,6 +63,10 @@ private fun emitHelp(services: List<String>): Flowable<String> {
             services.mapIndexed { index, s ->
                 "$index -> $s"
             })
+}
+
+private fun streamInfoHelp(streamDefinition: StreamDefinition): Flowable<String> {
+    return Flowable.fromIterable(listOf("Stream info: ") + streamDefinition.services.joinToString())
 }
 
 private fun Terminal.waitForNumberInput(services: List<String>): UserCommand.Single {
