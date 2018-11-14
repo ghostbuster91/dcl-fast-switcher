@@ -119,8 +119,8 @@ private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>)
             .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
 }
 
-private fun userOptionInput(userInput: Flowable<KeyStroke>): Flowable<UserCommand.SwitchTimestamp> {
-    val optionMapping = mapOf("t" to UserCommand.SwitchTimestamp)
+private fun userOptionInput(userInput: Flowable<KeyStroke>): Flowable<UserCommand> {
+    val optionMapping = mapOf("t" to UserCommand.SwitchTimestamp, "h" to UserCommand.SwitchHelp)
     return userInput
             .filter { it.character?.toString() in optionMapping }
             .map { optionMapping[it.character.toString()]!! }
