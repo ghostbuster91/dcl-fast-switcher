@@ -4,6 +4,8 @@ import com.googlecode.lanterna.input.KeyStroke
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.googlecode.lanterna.terminal.Terminal
 import de.gesellix.docker.compose.ComposeFileReader
+import io.ghostbuster91.docker.compose.logger.keyboard.*
+import io.ghostbuster91.docker.compose.logger.keyboard.linux.LinuxKeyboardLayout
 import io.reactivex.Flowable
 import io.reactivex.functions.Consumer
 import io.reactivex.schedulers.Schedulers
@@ -14,20 +16,24 @@ import java.io.UncheckedIOException
 import java.util.*
 import java.util.concurrent.TimeUnit
 
+typealias Service = String
+
 fun main(args: Array<String>) {
     val services = readServicesFromDockerConfig(args)
     val consoleOutConsumer = ConsoleOutConsumer()
-    emitHelp(services).blockingSubscribe(consoleOutConsumer)
+    val serviceMapping = ServiceMappingImpl(services)
+    val keyboardLayout = LinuxKeyboardLayout(serviceMapping)
+    emitHelp(keyboardLayout).blockingSubscribe(consoleOutConsumer)
     consoleOutConsumer.accept("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
-        val servicesStream = createUserCommandStream(terminal, services)
-                .scan(StreamDefinition(setOf(terminal.waitForNumberInput(services).service))) { acc: StreamDefinition, item: UserCommand ->
+        val servicesStream = createUserCommandStream(terminal, keyboardLayout)
+                .scan(StreamDefinition(setOf(terminal.waitForNumberInput(keyboardLayout).service))) { acc: StreamDefinition, item: UserCommand ->
                     when (item) {
                         is UserCommand.Add -> StreamDefinition(acc.services + item.service)
                         is UserCommand.Single -> StreamDefinition(setOf(item.service))
                         is UserCommand.Remove -> StreamDefinition(acc.services - item.service)
-                        UserCommand.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
-                        UserCommand.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
+                        UserCommand.Control.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
+                        UserCommand.Control.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
                     }
                 }
                 .distinctUntilChanged()
@@ -36,7 +42,7 @@ fun main(args: Array<String>) {
         servicesStream
                 .switchMap {
                     if (it.showHelp) {
-                        emitHelp(services)
+                        emitHelp( keyboardLayout)
                                 .concatWith(streamInfoHelp(it))
                                 .concatWith(Flowable.never())
                     } else {
@@ -53,15 +59,14 @@ class ConsoleOutConsumer : Consumer<String> {
     }
 }
 
-private fun emitHelp(services: List<String>): Flowable<String> {
+private fun emitHelp(keyboardLayout: KeyboardLayout): Flowable<String> {
     return Flowable.fromIterable(listOf(
             "=======================================================",
-            "Key bindings:",
-            "h - show/hide this help",
-            "t - show/hide timestamps",
-            "Services mapping:") +
-            services.mapIndexed { index, s ->
-                "$index -> $s"
+            "Key bindings:") +
+            keyboardLayout.getControlMapping() +
+            listOf("Services mapping:") +
+            keyboardLayout.getMapping().map { (letter, service) ->
+                "$letter -> $service"
             })
 }
 
@@ -69,11 +74,11 @@ private fun streamInfoHelp(streamDefinition: StreamDefinition): Flowable<String>
     return Flowable.fromIterable(listOf("Stream info: ") + streamDefinition.services.joinToString())
 }
 
-private fun Terminal.waitForNumberInput(services: List<String>): UserCommand.Single {
+private fun Terminal.waitForNumberInput(keyboardLayout: KeyboardLayout): UserCommand.Single {
     return keyStrokeStream(this)
             .subscribeOn(Schedulers.io())
             .let {
-                userNumberInput(it, services)
+                userSingleStream(it, keyboardLayout)
             }
             .blockingFirst()
 }
@@ -85,45 +90,39 @@ private fun readServicesFromDockerConfig(args: Array<String>): List<String> {
     return config["services"]!!.keys.toList()
 }
 
-private fun createUserCommandStream(terminal: Terminal, services: List<String>): Flowable<UserCommand> {
+private fun createUserCommandStream(terminal: Terminal, keyboardLayout: KeyboardLayout): Flowable<UserCommand> {
     val userInput = keyStrokeStream(terminal)
             .subscribeOn(Schedulers.io())
             .share()
-    val shiftKey = userShiftInput(userInput, services)
-    val altKey = userAltInput(userInput, services)
-    val numberKey = userNumberInput(userInput, services)
-    val optionsKey = userOptionInput(userInput)
+    val shiftKey = userRemoveStream(userInput, keyboardLayout)
+    val altKey = userAddStream(userInput, keyboardLayout)
+    val numberKey = userSingleStream(userInput, keyboardLayout)
+    val optionsKey = userControlStream(userInput, keyboardLayout)
     return Flowable.merge(shiftKey, altKey, numberKey, optionsKey)
 }
 
-private fun userShiftInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Remove> {
-    val shiftMapping = mapOf("!" to 1, "@" to 2, "#" to 3, "$" to 4, "%" to 5, "^" to 6, "&" to 7, "*" to 8, "(" to 9, ")" to 0)
+private fun userRemoveStream(userInput: Flowable<KeyStroke>, removeServiceMapping: RemoveServiceMapping): Flowable<UserCommand.Remove> {
     return userInput
-            .filter { it.character?.toString() in shiftMapping }
-            .map { shiftMapping[it.character.toString()]!! }
-            .map { UserCommand.Remove(services.getOrElse(it) { services[0] }) }
+            .filter { removeServiceMapping.isRemoveKey(it) }
+            .map { removeServiceMapping.mapRemoveKey(it) }
 }
 
-private fun userNumberInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Single> {
+private fun userSingleStream(userInput: Flowable<KeyStroke>, singleServiceMapping: SingleServiceMapping): Flowable<UserCommand.Single> {
     return userInput
-            .filter { it.character?.toString()?.matches("[0-9]".toRegex()) ?: false }
-            .map { it.character.toString().toInt() }
-            .map { UserCommand.Single(services.getOrElse(it) { services[0] }) }
+            .filter { singleServiceMapping.isSingleServiceKey(it) }
+            .map { singleServiceMapping.mapSingleServiceKey(it) }
 }
 
-private fun userAltInput(userInput: Flowable<KeyStroke>, services: List<String>): Flowable<UserCommand.Add> {
-    val altMapping = mapOf("Ń" to 1, "™" to 2, "€" to 3, "ß" to 4, "į" to 5, "§" to 6, "¶" to 7, "•" to 8, "Ľ" to 9, "ľ" to 0)
+private fun userAddStream(userInput: Flowable<KeyStroke>, addServiceMapping: AddServiceMapping): Flowable<UserCommand.Add> {
     return userInput
-            .filter { it.character?.toString() in altMapping }
-            .map { altMapping[it.character.toString()]!! }
-            .map { UserCommand.Add(services.getOrElse(it) { services[0] }) }
+            .filter { addServiceMapping.isAddKey(it) }
+            .map { addServiceMapping.mapAddKey(it) }
 }
 
-private fun userOptionInput(userInput: Flowable<KeyStroke>): Flowable<UserCommand> {
-    val optionMapping = mapOf("t" to UserCommand.SwitchTimestamp, "h" to UserCommand.SwitchHelp)
+private fun userControlStream(userInput: Flowable<KeyStroke>, controlMapping: ControlMapping): Flowable<UserCommand> {
     return userInput
-            .filter { it.character?.toString() in optionMapping }
-            .map { optionMapping[it.character.toString()]!! }
+            .filter { controlMapping.isControlKey(it) }
+            .map { controlMapping.mapControlKey(it) }
 }
 
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
@@ -174,8 +173,10 @@ sealed class UserCommand {
     data class Single(val service: String) : UserCommand()
     data class Add(val service: String) : UserCommand()
     data class Remove(val service: String) : UserCommand()
-    object SwitchTimestamp : UserCommand()
-    object SwitchHelp : UserCommand()
+    sealed class Control : UserCommand() {
+        object SwitchTimestamp : Control()
+        object SwitchHelp : Control()
+    }
 }
 
 
