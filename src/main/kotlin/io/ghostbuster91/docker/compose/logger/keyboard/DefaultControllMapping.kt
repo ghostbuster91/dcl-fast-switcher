@@ -6,7 +6,8 @@ import io.ghostbuster91.docker.compose.logger.UserCommand
 class DefaultControllMapping : ControlMapping {
     private val controlKeysMapping = mapOf(
             "h" to UserCommand.Control.SwitchHelp,
-            "j" to UserCommand.Control.SwitchTimestamp)
+            "j" to UserCommand.Control.SwitchTimestamp,
+            "i" to UserCommand.Control.SwitchSearchFor)
 
     override fun isControlKey(keyStroke: KeyStroke): Boolean {
         return keyStroke.character?.toString() in controlKeysMapping.keys
@@ -19,6 +20,7 @@ class DefaultControllMapping : ControlMapping {
     override fun getControlMapping(): List<String> {
         return listOf(
                 "h - show/hide this help",
-                "j - show/hide timestamps")
+                "j - show/hide timestamps",
+                "i - turn on filter")
     }
 }
