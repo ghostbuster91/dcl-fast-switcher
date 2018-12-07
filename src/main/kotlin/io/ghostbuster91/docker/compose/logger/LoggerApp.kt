@@ -1,22 +1,24 @@
 package io.ghostbuster91.docker.compose.logger
 
 import com.googlecode.lanterna.input.KeyStroke
+import com.googlecode.lanterna.input.KeyType
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.googlecode.lanterna.terminal.Terminal
 import de.gesellix.docker.compose.ComposeFileReader
-import io.ghostbuster91.docker.compose.logger.keyboard.*
+import io.ghostbuster91.docker.compose.logger.Colors.red
+import io.ghostbuster91.docker.compose.logger.keyboard.EffectsMapping
+import io.ghostbuster91.docker.compose.logger.keyboard.KeyboardLayout
+import io.ghostbuster91.docker.compose.logger.keyboard.ServiceMappingImpl
+import io.ghostbuster91.docker.compose.logger.keyboard.SingleServiceMapping
 import io.ghostbuster91.docker.compose.logger.keyboard.linux.LinuxKeyboardLayout
-import io.reactivex.BackpressureStrategy
 import io.reactivex.Emitter
 import io.reactivex.Flowable
-import io.reactivex.FlowableEmitter
 import io.reactivex.functions.Consumer
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.UncheckedIOException
-import java.util.concurrent.TimeUnit
 
 typealias Service = String
 
@@ -26,7 +28,6 @@ fun main(args: Array<String>) {
     val serviceMapping = ServiceMappingImpl(services)
     val keyboardLayout = LinuxKeyboardLayout(serviceMapping)
     emitHelp(keyboardLayout).blockingSubscribe(consoleOutConsumer)
-    consoleOutConsumer.accept("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
         val keyStrokesStream = keyStrokeStream(terminal)
                 .subscribeOn(Schedulers.io())
@@ -38,28 +39,47 @@ fun main(args: Array<String>) {
                         is Effect.Println -> it.apply(consoleOutConsumer)
                     }
                 }
-        val servicesStream = createUserCommandStream(keyboardLayout, keyStrokesStream)
-                .scan(StreamDefinition(setOf(terminal.waitForNumberInput(keyboardLayout).service))) { acc: StreamDefinition, item: UserCommand ->
-                    when (item) {
-                        is UserCommand.Add -> StreamDefinition(acc.services + item.service)
-                        is UserCommand.Single -> StreamDefinition(setOf(item.service))
-                        is UserCommand.Remove -> StreamDefinition(acc.services - item.service)
-                        UserCommand.Control.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
-                        UserCommand.Control.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
+
+        val servicesStream = keyStrokesStream
+                .doOnSubscribe { consoleOutConsumer.accept("Press any key to continue...") }
+                .scan(StreamDefinition(setOf(terminal.waitForNumberInput(keyboardLayout).service))) { acc: StreamDefinition, keyStroke: KeyStroke ->
+                    val character = keyStroke.character?.toString()
+                    if (acc.find != null) {
+                        when {
+                            keyStroke.keyType == KeyType.Escape -> acc.copy(find = null)
+                            keyStroke.keyType == KeyType.Backspace -> acc.copy(find = acc.find.copy(text = acc.find.text.dropLast(1)))
+                            character != null && keyStroke.keyType != KeyType.Enter-> acc.copy(find = acc.find.copy(text = acc.find.text + character))
+                            else -> acc
+                        }
+                    } else {
+                        val userCommand = keyboardLayout.mapCommand(keyStroke)
+                        when (userCommand) {
+                            is UserCommand.Add -> StreamDefinition(acc.services + userCommand.service)
+                            is UserCommand.Single -> StreamDefinition(setOf(userCommand.service))
+                            is UserCommand.Remove -> StreamDefinition(acc.services - userCommand.service)
+                            UserCommand.Control.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
+                            UserCommand.Control.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
+                            UserCommand.Control.SwitchFind -> acc.copy(find = FindOption(""))
+                            else -> acc
+                        }
                     }
                 }
                 .distinctUntilChanged()
                 .doOnNext { consoleOutConsumer.accept("Switched to $it") }
 
         servicesStream
-                .switchMap {
-                    if (it.showHelp) {
+                .switchMap { serviceDef ->
+                    val stream = if (serviceDef.showHelp) {
                         emitHelp(keyboardLayout)
-                                .concatWith(streamInfoHelp(it))
+                                .concatWith(streamInfoHelp(serviceDef))
                                 .concatWith(Flowable.never())
                     } else {
-                        streamFromDockerCompose(it)
+                        streamFromDockerCompose(serviceDef)
                     }
+                    serviceDef.find
+                            ?.filter(stream)
+                            ?.map { if(serviceDef.find.text.isNotEmpty()) it.replace(serviceDef.find.text, serviceDef.find.text.red()) else it }
+                            ?: stream
                 }
                 .blockingSubscribe(consoleOutConsumer)
     }
@@ -102,36 +122,10 @@ private fun readServicesFromDockerConfig(args: Array<String>): List<String> {
     return config["services"]!!.keys.toList()
 }
 
-private fun createUserCommandStream(keyboardLayout: KeyboardLayout, userInput: Flowable<KeyStroke>): Flowable<UserCommand> {
-    val shiftKey = userRemoveStream(userInput, keyboardLayout)
-    val altKey = userAddStream(userInput, keyboardLayout)
-    val numberKey = userSingleStream(userInput, keyboardLayout)
-    val optionsKey = userControlStream(userInput, keyboardLayout)
-    return Flowable.merge(shiftKey, altKey, numberKey, optionsKey)
-}
-
-private fun userRemoveStream(userInput: Flowable<KeyStroke>, removeServiceMapping: RemoveServiceMapping): Flowable<UserCommand.Remove> {
-    return userInput
-            .filter { removeServiceMapping.isRemoveKey(it) }
-            .map { removeServiceMapping.mapRemoveKey(it) }
-}
-
 private fun userSingleStream(userInput: Flowable<KeyStroke>, singleServiceMapping: SingleServiceMapping): Flowable<UserCommand.Single> {
     return userInput
             .filter { singleServiceMapping.isSingleServiceKey(it) }
             .map { singleServiceMapping.mapSingleServiceKey(it) }
-}
-
-private fun userAddStream(userInput: Flowable<KeyStroke>, addServiceMapping: AddServiceMapping): Flowable<UserCommand.Add> {
-    return userInput
-            .filter { addServiceMapping.isAddKey(it) }
-            .map { addServiceMapping.mapAddKey(it) }
-}
-
-private fun userControlStream(userInput: Flowable<KeyStroke>, controlMapping: ControlMapping): Flowable<UserCommand> {
-    return userInput
-            .filter { controlMapping.isControlKey(it) }
-            .map { controlMapping.mapControlKey(it) }
 }
 
 private fun userEffectsStream(userInput: Flowable<KeyStroke>, effectMapping: EffectsMapping): Flowable<Effect> {
@@ -183,7 +177,9 @@ fun BufferedReader.toFlowable(): Flowable<String> {
 
 typealias Command = List<String>
 
-sealed class Action
+sealed class Action {
+    object Unknown : Action()
+}
 
 sealed class UserCommand : Action() {
     data class Single(val service: String) : UserCommand()
@@ -192,6 +188,7 @@ sealed class UserCommand : Action() {
     sealed class Control : UserCommand() {
         object SwitchTimestamp : Control()
         object SwitchHelp : Control()
+        object SwitchFind : Control()
     }
 }
 
@@ -206,7 +203,12 @@ sealed class Effect : Action() {
 
 data class StreamDefinition(val services: Set<String>,
                             val showTimeStamps: Boolean = false,
-                            val showHelp: Boolean = false)
+                            val showHelp: Boolean = false,
+                            val find: FindOption? = null)
+
+data class FindOption(val text: String)
+
+fun FindOption.filter(input: Flowable<String>) = input.filter { it.contains(text) }
 
 data class DockerComposeCommandBuilder(val services: List<String>,
                                        val showTimestamps: Boolean = false,
