@@ -47,9 +47,9 @@ fun main(args: Array<String>) {
                     } else {
                         streamFromDockerCompose(serviceDef)
                     }
-                    serviceDef.search
-                            ?.filter(stream)
-                            ?.map { if (serviceDef.search.text.isNotEmpty()) it.replace(serviceDef.search.text, serviceDef.search.text.red()) else it }
+                    serviceDef.filter
+                            ?.apply(stream)
+                            ?.map { if (serviceDef.filter.text.isNotEmpty()) it.replace(serviceDef.filter.text, serviceDef.filter.text.red()) else it }
                             ?: stream
                 }
                 .blockingSubscribe(consoleOutConsumer)
@@ -60,7 +60,7 @@ private fun Flowable<KeyStroke>.serviceStream(consoleOutConsumer: ConsoleOutCons
     return doOnSubscribe { consoleOutConsumer.accept("Press any key to continue...") }
             .scan(StreamDefinition(setOf(terminal.waitForNumberInput(keyboardLayout).service))) { acc: StreamDefinition, keyStroke: KeyStroke ->
                 val character = keyStroke.character?.toString()
-                if (acc.search != null) {
+                if (acc.filter != null) {
                     handleSearchInput(keyStroke, acc, character)
                 } else {
                     handleUserCommand(keyboardLayout, keyStroke, acc)
@@ -72,9 +72,9 @@ private fun Flowable<KeyStroke>.serviceStream(consoleOutConsumer: ConsoleOutCons
 
 private fun handleSearchInput(keyStroke: KeyStroke, acc: StreamDefinition, character: String?): StreamDefinition {
     return when {
-        keyStroke.keyType == KeyType.Escape -> acc.copy(search = null)
-        keyStroke.keyType == KeyType.Backspace -> acc.copy(search = acc.search!!.copy(text = acc.search.text.dropLast(1)))
-        character != null && keyStroke.keyType != KeyType.Enter -> acc.copy(search = acc.search!!.copy(text = acc.search.text + character))
+        keyStroke.keyType == KeyType.Escape -> acc.copy(filter = null)
+        keyStroke.keyType == KeyType.Backspace -> acc.copy(filter = acc.filter!!.copy(text = acc.filter.text.dropLast(1)))
+        character != null && keyStroke.keyType != KeyType.Enter -> acc.copy(filter = acc.filter!!.copy(text = acc.filter.text + character))
         else -> acc
     }
 }
@@ -87,7 +87,7 @@ private fun handleUserCommand(keyboardLayout: LinuxKeyboardLayout, keyStroke: Ke
         is UserCommand.Remove -> StreamDefinition(acc.services - userCommand.service)
         UserCommand.Control.SwitchTimestamp -> acc.copy(showTimeStamps = !acc.showTimeStamps)
         UserCommand.Control.SwitchHelp -> acc.copy(showHelp = !acc.showHelp)
-        UserCommand.Control.SwitchSearchFor -> acc.copy(search = SearchFor(""))
+        UserCommand.Control.SwitchSearchFor -> acc.copy(filter = Filter(""))
         else -> acc
     }
 }
@@ -168,8 +168,8 @@ sealed class Effect : Action() {
 data class StreamDefinition(val services: Set<String>,
                             val showTimeStamps: Boolean = false,
                             val showHelp: Boolean = false,
-                            val search: SearchFor? = null)
+                            val filter: Filter? = null)
 
-data class SearchFor(val text: String)
+data class Filter(val text: String)
 
-private fun SearchFor.filter(input: Flowable<String>) = input.filter { it.contains(text) }
+private fun Filter.apply(input: Flowable<String>) = input.filter { it.contains(text) }

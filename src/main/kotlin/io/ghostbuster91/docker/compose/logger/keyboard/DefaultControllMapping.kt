@@ -21,6 +21,6 @@ class DefaultControllMapping : ControlMapping {
         return listOf(
                 "h - show/hide this help",
                 "j - show/hide timestamps",
-                "i - turn on search")
+                "i - turn on filter")
     }
 }
