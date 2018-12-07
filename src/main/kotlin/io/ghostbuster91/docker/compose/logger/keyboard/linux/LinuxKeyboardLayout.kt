@@ -8,4 +8,5 @@ class LinuxKeyboardLayout(serviceMapping: ServiceMappingImpl)
         AddServiceMapping by LinuxAltAddServiceMapping(serviceMapping),
         SingleServiceMapping by DefaultSingleServiceMapping(serviceMapping),
         ControlMapping by DefaultControllMapping(),
-        ServiceMapping by serviceMapping
+        ServiceMapping by serviceMapping,
+        EffectsMapping by DefaultEffectMapping()

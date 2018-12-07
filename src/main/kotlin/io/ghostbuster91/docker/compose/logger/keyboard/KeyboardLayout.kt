@@ -1,9 +1,10 @@
 package io.ghostbuster91.docker.compose.logger.keyboard
 
 import com.googlecode.lanterna.input.KeyStroke
+import io.ghostbuster91.docker.compose.logger.Effect
 import io.ghostbuster91.docker.compose.logger.UserCommand
 
-interface KeyboardLayout : AddServiceMapping, RemoveServiceMapping, ControlMapping, SingleServiceMapping, ServiceMapping
+interface KeyboardLayout : AddServiceMapping, RemoveServiceMapping, ControlMapping, SingleServiceMapping, ServiceMapping, EffectsMapping
 
 interface AddServiceMapping {
     fun isAddKey(keyStroke: KeyStroke): Boolean
@@ -24,4 +25,9 @@ interface ControlMapping {
 interface SingleServiceMapping {
     fun isSingleServiceKey(keyStroke: KeyStroke): Boolean
     fun mapSingleServiceKey(keyStroke: KeyStroke): UserCommand.Single
+}
+
+interface EffectsMapping {
+    fun isEffectKey(keyStroke: KeyStroke) : Boolean
+    fun mapEffectKey(keyStroke: KeyStroke) : Effect
 }

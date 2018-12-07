@@ -26,7 +26,17 @@ fun main(args: Array<String>) {
     emitHelp(keyboardLayout).blockingSubscribe(consoleOutConsumer)
     consoleOutConsumer.accept("Press any key to continue...")
     DefaultTerminalFactory().createTerminal().use { terminal ->
-        val servicesStream = createUserCommandStream(terminal, keyboardLayout)
+        val keyStrokesStream = keyStrokeStream(terminal)
+                .subscribeOn(Schedulers.io())
+                .share()
+        userEffectsStream(keyStrokesStream, keyboardLayout)
+                .subscribeOn(Schedulers.io())
+                .subscribe {
+                    when (it) {
+                        is Effect.Println -> it.apply(consoleOutConsumer)
+                    }
+                }
+        val servicesStream = createUserCommandStream(keyboardLayout, keyStrokesStream)
                 .scan(StreamDefinition(setOf(terminal.waitForNumberInput(keyboardLayout).service))) { acc: StreamDefinition, item: UserCommand ->
                     when (item) {
                         is UserCommand.Add -> StreamDefinition(acc.services + item.service)
@@ -42,7 +52,7 @@ fun main(args: Array<String>) {
         servicesStream
                 .switchMap {
                     if (it.showHelp) {
-                        emitHelp( keyboardLayout)
+                        emitHelp(keyboardLayout)
                                 .concatWith(streamInfoHelp(it))
                                 .concatWith(Flowable.never())
                     } else {
@@ -90,10 +100,7 @@ private fun readServicesFromDockerConfig(args: Array<String>): List<String> {
     return config["services"]!!.keys.toList()
 }
 
-private fun createUserCommandStream(terminal: Terminal, keyboardLayout: KeyboardLayout): Flowable<UserCommand> {
-    val userInput = keyStrokeStream(terminal)
-            .subscribeOn(Schedulers.io())
-            .share()
+private fun createUserCommandStream(keyboardLayout: KeyboardLayout, userInput: Flowable<KeyStroke>): Flowable<UserCommand> {
     val shiftKey = userRemoveStream(userInput, keyboardLayout)
     val altKey = userAddStream(userInput, keyboardLayout)
     val numberKey = userSingleStream(userInput, keyboardLayout)
@@ -123,6 +130,12 @@ private fun userControlStream(userInput: Flowable<KeyStroke>, controlMapping: Co
     return userInput
             .filter { controlMapping.isControlKey(it) }
             .map { controlMapping.mapControlKey(it) }
+}
+
+private fun userEffectsStream(userInput: Flowable<KeyStroke>, effectMapping: EffectsMapping): Flowable<Effect> {
+    return userInput
+            .filter { effectMapping.isEffectKey(it) }
+            .map { effectMapping.mapEffectKey(it) }
 }
 
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
@@ -169,13 +182,23 @@ fun BufferedReader.toFlowable(): Flowable<String> {
 
 typealias Command = List<String>
 
-sealed class UserCommand {
+sealed class Action
+
+sealed class UserCommand : Action() {
     data class Single(val service: String) : UserCommand()
     data class Add(val service: String) : UserCommand()
     data class Remove(val service: String) : UserCommand()
     sealed class Control : UserCommand() {
         object SwitchTimestamp : Control()
         object SwitchHelp : Control()
+    }
+}
+
+sealed class Effect : Action() {
+    object Println : Effect() {
+        fun apply(consumer: Consumer<String>) {
+            consumer.accept("\n")
+        }
     }
 }
 
