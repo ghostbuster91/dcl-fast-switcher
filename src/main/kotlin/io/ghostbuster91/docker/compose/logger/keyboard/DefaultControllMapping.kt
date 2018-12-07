@@ -7,7 +7,7 @@ class DefaultControllMapping : ControlMapping {
     private val controlKeysMapping = mapOf(
             "h" to UserCommand.Control.SwitchHelp,
             "j" to UserCommand.Control.SwitchTimestamp,
-            "i" to UserCommand.Control.SwitchFind)
+            "i" to UserCommand.Control.SwitchSearchFor)
 
     override fun isControlKey(keyStroke: KeyStroke): Boolean {
         return keyStroke.character?.toString() in controlKeysMapping.keys
@@ -21,6 +21,6 @@ class DefaultControllMapping : ControlMapping {
         return listOf(
                 "h - show/hide this help",
                 "j - show/hide timestamps",
-                "i - turn on find")
+                "i - turn on search")
     }
 }
