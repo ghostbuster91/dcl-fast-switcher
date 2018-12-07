@@ -6,14 +6,16 @@ import com.googlecode.lanterna.terminal.Terminal
 import de.gesellix.docker.compose.ComposeFileReader
 import io.ghostbuster91.docker.compose.logger.keyboard.*
 import io.ghostbuster91.docker.compose.logger.keyboard.linux.LinuxKeyboardLayout
+import io.reactivex.BackpressureStrategy
+import io.reactivex.Emitter
 import io.reactivex.Flowable
+import io.reactivex.FlowableEmitter
 import io.reactivex.functions.Consumer
 import io.reactivex.schedulers.Schedulers
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.UncheckedIOException
-import java.util.*
 import java.util.concurrent.TimeUnit
 
 typealias Service = String
@@ -139,10 +141,9 @@ private fun userEffectsStream(userInput: Flowable<KeyStroke>, effectMapping: Eff
 }
 
 private fun keyStrokeStream(terminal: Terminal): Flowable<KeyStroke> {
-    return Flowable.interval(100, TimeUnit.MILLISECONDS)
-            .map { Optional.ofNullable(terminal.pollInput()) }
-            .filter { it.isPresent }
-            .map { it.get() }
+    return Flowable.generate { e: Emitter<KeyStroke> ->
+        e.onNext(terminal.readInput())
+    }
 }
 
 private fun streamFromDockerCompose(streamDefinition: StreamDefinition): Flowable<String> {
